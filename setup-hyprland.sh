@@ -3,7 +3,7 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-# --- Sudo Check --- (NEW)
+# --- Sudo Check ---
 if [ "$EUID" -ne 0 ]; then
   echo "Please run this script with sudo."
   exit
@@ -19,14 +19,13 @@ NC='\033[0m' # No Color
 install_packages() {
     echo -e "${GREEN}---> Installing necessary packages...${NC}"
     
-    # The full list of packages needed for your setup
     PACKAGES=(
         hyprland hyprpaper waybar wofi swaylock dunst alacritty
         pcmanfm firefox qt5-wayland qt6-wayland polkit-kde
         pipewire wireplumber pavucontrol wpctl playerctl brightnessctl
         flameshot noto-fonts noto-fonts-emoji ttf-font-awesome
         xdg-desktop-portal-hyprland git
-        kdeconnect network-manager-applet # <-- ADDED
+        kdeconnect
     )
     
     pacman -Syu --noconfirm --needed "${PACKAGES[@]}"
@@ -34,32 +33,53 @@ install_packages() {
     echo -e "${GREEN}---> Package installation complete!${NC}"
 }
 
+### NVIDIA ADDITION ###
+install_nvidia_drivers() {
+    echo -e "${GREEN}---> Installing NVIDIA drivers and dependencies...${NC}"
+    pacman -S --noconfirm --needed nvidia-dkms linux-headers libva-nvidia-driver
+
+    echo -e "${GREEN}---> Configuring boot process for NVIDIA...${NC}"
+    sed -i 's/^MODULES=()/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
+    mkinitcpio -P
+
+    echo "nvidia_drm.modeset=1" > /etc/kernel/cmdline
+}
+### END NVIDIA ADDITION ###
+
+
 create_configs() {
-    # This function needs to run as the user, not root.
-    # We use the SUDO_USER variable which is set when you run a script with sudo.
     local user_home="/home/$SUDO_USER"
 
     echo -e "${GREEN}---> Creating configuration files for user: $SUDO_USER...${NC}"
     
-    # Create config directories as the user
     sudo -u "$SUDO_USER" mkdir -p "$user_home/.config/hypr"
     sudo -u "$SUDO_USER" mkdir -p "$user_home/.config/waybar"
-    sudo -u "$SUDO_USER" mkdir -p "$user_home/Pictures/Wallpapers" # <-- ADDED
+    sudo -u "$SUDO_USER" mkdir -p "$user_home/Pictures/Wallpapers"
 
     # Hyprland Config
     sudo -u "$SUDO_USER" tee "$user_home/.config/hypr/hyprland.conf" > /dev/null <<'EOF'
+# Monitor and Startup
 monitor=,preferred,auto,auto
 exec-once = waybar
 exec-once = hyprpaper
 exec-once = dunst
-exec-once = kdeconnect-indicator # <-- UPDATED from kdeconnectd
+exec-once = kdeconnect-indicator
 exec-once = /usr/lib/polkit-kde-authentication-agent-1
+
+# Environment Variables
 env = XCURSOR_THEME,breeze_cursors,24
 env = GTK_THEME,Breeze
+
+### NVIDIA ADDITION ###
+# Set environment variables for NVIDIA
+env = LIBVA_DRIVER_NAME,nvidia
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = WLR_NO_HARDWARE_CURSORS,1
+### END NVIDIA ADDITION ###
+
+# General Settings
 general {
-    gaps_in = 5
-    gaps_out = 0
-    border_size = 2
+    gaps_in = 5; gaps_out = 0; border_size = 2;
     col.active_border = rgb(285577)
     col.inactive_border = rgb(5F676A)
     layout = dwindle
@@ -70,15 +90,14 @@ decoration {
     drop_shadow = false
 }
 animations { enabled = false }
-dwindle {
-    pseudotile = true
-    preserve_split = true
-}
+dwindle { pseudotile = true; preserve_split = true; }
+
+# Keybinds
 $mod = SUPER
 bind = $mod, D, exec, wofi --show drun
 bind = $mod, RETURN, exec, alacritty
 bind = $mod SHIFT, B, exec, firefox
-bind = $mod SHIFT, D, exec, discord --ozone-platform-hint=auto # <-- UPDATED for Wayland screenshare
+bind = $mod SHIFT, D, exec, discord --ozone-platform-hint=auto
 bind = $mod SHIFT, F, exec, pcmanfm
 bind = $mod SHIFT, RETURN, exec, alacritty -t 'alacritty-float'
 bind = $mod SHIFT, X, exec, swaylock
@@ -132,44 +151,15 @@ bind =, XF86AudioPlay, exec, playerctl play-pause
 bind =, XF86AudioStop, exec, playerctl stop
 binde=, XF86MonBrightnessUp, exec, brightnessctl set +10%
 binde=, XF86MonBrightnessDown, exec, brightnessctl set 10-%
+
+# Window Rules
 windowrulev2 = float, title:^(alacritty-float)$
 windowrulev2 = center, title:^(alacritty-float)$
 EOF
 
     # Waybar Config
     sudo -u "$SUDO_USER" tee "$user_home/.config/waybar/config.jsonc" > /dev/null <<'EOF'
-{
-    "layer": "top", "position": "top", "height": 20, "spacing": 4,
-    "modules-left": ["hyprland/workspaces"],
-    "modules-center": ["clock"],
-    "modules-right": ["network", "pulseaudio", "battery", "disk", "cpu", "memory"],
-    "hyprland/workspaces": { "format": "{name}" },
-    "network": {
-        "format-wifi": "W: {ipaddr} ({signalStrength}%)",
-        "format-ethernet": "E: {ipaddr}",
-        "format-disconnected": "Offline",
-        "tooltip-format": "{ifname} via {gwaddr} ",
-        "on-click": "nm-connection-editor"
-    },
-    "pulseaudio": {
-        "format": "V: {volume}% {icon}", "format-muted": "V: muted",
-        "format-icons": { "default": ["", "", ""] },
-        "on-click": "pavucontrol"
-    },
-    "battery": {
-        "states": { "good": 95, "warning": 30, "critical": 15 },
-        "format": "{status} {capacity}% {time}",
-        "format-charging": " {capacity}%", "format-plugged": " {capacity}%",
-        "format-alt": "{time} {icon}", "format-icons": ["", "", "", "", ""]
-    },
-    "disk": { "interval": 30, "format": "💾 {free}", "path": "/" },
-    "cpu": { "interval": 5, "format": "CPU: {load_avg}", "tooltip": true },
-    "memory": { "interval": 5, "format": "MEM: {}%" },
-    "clock": {
-        "format": "{:%Y-%m-%d %H:%M:%S}",
-        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>"
-    }
-}
+{ "layer": "top", "position": "top", "height": 20, "spacing": 4, "modules-left": ["hyprland/workspaces"], "modules-center": ["clock"], "modules-right": ["network", "pulseaudio", "battery", "disk", "cpu", "memory"], "hyprland/workspaces": { "format": "{name}" }, "network": { "format-wifi": "W: {ipaddr} ({signalStrength}%)", "format-ethernet": "E: {ipaddr}", "format-disconnected": "Offline", "tooltip-format": "{ifname} via {gwaddr} ", "on-click": "nm-connection-editor" }, "pulseaudio": { "format": "V: {volume}% {icon}", "format-muted": "V: muted", "format-icons": { "default": ["", "", ""] }, "on-click": "pavucontrol" }, "battery": { "states": { "good": 95, "warning": 30, "critical": 15 }, "format": "{status} {capacity}% {time}", "format-charging": " {capacity}%", "format-plugged": " {capacity}%", "format-alt": "{time} {icon}", "format-icons": ["", "", "", "", ""] }, "disk": { "interval": 30, "format": "💾 {free}", "path": "/" }, "cpu": { "interval": 5, "format": "CPU: {load_avg}", "tooltip": true }, "memory": { "interval": 5, "format": "MEM: {}%" }, "clock": { "format": "{:%Y-%m-%d %H:%M:%S}", "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>" }}
 EOF
 
     # Waybar CSS
@@ -200,12 +190,13 @@ final_instructions() {
     echo "   The script has already created the directory for you. Just add an image!"
     echo "2. It's highly recommended to ${YELLOW}reboot${NC} your system now."
     echo "   You can do this by running: ${GREEN}reboot${NC}"
-    echo "3. After rebooting, if you don't have a graphical login manager, simply type ${GREEN}Hyprland${NC} at the TTY prompt and press Enter."
+    echo "3. After rebooting, simply type ${GREEN}Hyprland${NC} at the TTY prompt and press Enter."
     echo -e "\nWelcome to Hyprland!"
 }
 
 # --- Script Execution ---
 
 install_packages
+install_nvidia_drivers ### NVIDIA ADDITION ###
 create_configs
 final_instructions
